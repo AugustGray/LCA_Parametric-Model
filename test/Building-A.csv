@@ -1,0 +1,15 @@
+Quantity,Value,Unit
+--- AREAS ---,,
+First Floor Area,576.00,m²
+Roof Area (Assumed),576.00,m²
+Upper Levels Area,1728.00,m²
+GROSS FLOOR AREA,2304.00,m²
+Gross Exterior Wall Area,1440.00,m²
+Total Window Area,432.00,m²
+NET EXTERIOR WALL AREA,1008.00,m²
+Vertical Circulation Area,184.66,m²
+Interior Wall Area (Est.),2073.60,m²
+--- LINEAR METERS ---,,
+Total Columns,27,units
+Total Column Length,324.00,m
+Total Beam Length,1008.00,m

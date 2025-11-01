@@ -23,8 +23,8 @@ def get_user_inputs() -> dict:
     """
     print("--- Building Dimensions ---")
     inputs = {}
-    inputs['length'] = get_numeric_input("Enter building length E/W (m): ")
-    inputs['width'] = get_numeric_input("Enter building width N/S (m): ")
+    inputs['length'] = get_numeric_input("Enter building length N/S (m): ")
+    inputs['width'] = get_numeric_input("Enter building width E/W (m): ")
     inputs['height_per_story'] = get_numeric_input("Enter average height per story (m): ")
     inputs['num_stories'] = int(get_numeric_input("Enter number of stories (levels): "))
     inputs['num_vertical_modules'] = int(get_numeric_input("Enter number of vertical circulation modules (stairs/elevators) (0, 1, 2...): "))
