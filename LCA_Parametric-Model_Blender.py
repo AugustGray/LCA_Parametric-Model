@@ -259,6 +259,7 @@ def generate_blender_script(model_name: str, inputs: dict):
     COL_SPACING_L = inputs['col_spacing_length']
     COL_SPACING_W = inputs['col_spacing_width']
     N_CORES = inputs['num_vertical_modules']
+    PDF = inputs['partition_density_factor'] # Partition Density Factor
     
     # Calculate derived geometry values
     TOTAL_H = H_STORY * N_STORIES
@@ -293,6 +294,7 @@ def generate_blender_script(model_name: str, inputs: dict):
     BEAM_HEIGHT = 0.4
     BEAM_WIDTH = 0.3
     CORE_DIM = 5.0 # Assume 5x5m for each vertical core
+    PARTITION_THICKNESS = 0.15 # For internal walls
 
     # --- 3. Create the Blender Script String ---
     # This is a giant f-string that *is* the Python script
@@ -332,6 +334,7 @@ WWR_E = {wwr_e}
 WWR_W = {wwr_w}
 
 N_CORES = {N_CORES}
+PDF = {PDF} # Partition Density Factor
 
 # --- Cosmetic Parameters ---
 SLAB_THICKNESS = {SLAB_THICKNESS}
@@ -340,6 +343,7 @@ COL_RADIUS = {COL_RADIUS}
 BEAM_HEIGHT = {BEAM_HEIGHT}
 BEAM_WIDTH = {BEAM_WIDTH}
 CORE_DIM = {CORE_DIM}
+PARTITION_THICKNESS = {PARTITION_THICKNESS}
     
 # --- Helper Functions ---
 
@@ -413,6 +417,7 @@ def build_model():
     coll_beams = create_collection("Beams")
     coll_facades = create_collection("Facades")
     coll_cores = create_collection("Cores")
+    coll_partitions = create_collection("Internal_Partitions")
     coll_cutters = create_collection("Cutters (Hide Me)")
 
     # --- 2. Create Slabs ---
@@ -569,6 +574,55 @@ def build_model():
             
             # Move the X-coordinate for the next core
             current_core_x += CORE_DIM + 1.0
+
+    # --- 7. Create Internal Partitions (Representative) ---
+    if PDF > 0:
+        print(f"Generating partitions with density factor: {{PDF}}")
+        
+        for i in range(N_STORIES):
+            # Partitions go from slab to slab (bottom of next slab)
+            z_bottom = i * H_STORY
+            z_top = (i + 1) * H_STORY
+            
+            # Stop partitions just under the slab above
+            panel_height = z_top - z_bottom - SLAB_THICKNESS 
+            z_center = z_bottom + (panel_height / 2.0)
+            
+            if panel_height <= 0:
+                continue # Skip floor if height is invalid
+
+            # Calculate total partition length needed for this floor
+            # (L * W * PDF) = target m² area / panel_height = target m length
+            target_length_per_floor = (L * W * PDF) / panel_height
+            
+            # Create one main E-W corridor
+            corridor_y = 0 # Centered
+            create_box(f"Corridor_L{{i}}", (0, corridor_y, z_center), (L, PARTITION_THICKNESS, panel_height), coll_partitions)
+            
+            length_created = L
+            remaining_length = target_length_per_floor - length_created
+            
+            # Add perpendicular "office" walls
+            num_bays_x = NUM_COLS_X - 1
+            if remaining_length > 0 and num_bays_x > 0:
+                
+                # Get length of each perpendicular wall
+                wall_length_per_bay = remaining_length / num_bays_x
+                
+                # Cap the wall length (e.g., can't be longer than half the building width)
+                wall_length_per_bay = min(wall_length_per_bay, (W / 2.0) * 0.9)
+                
+                if wall_length_per_bay > 0.1: # Only create if they have meaningful length
+                    for j in range(num_bays_x):
+                        x_pos = X_START + (j * X_SPACING) + (X_SPACING / 2.0)
+                        
+                        # Create one wall north of corridor
+                        y_pos_n = corridor_y + (wall_length_per_bay / 2.0)
+                        create_box(f"Partition_N_L{{i}}_{{j}}", (x_pos, y_pos_n, z_center), (PARTITION_THICKNESS, wall_length_per_bay, panel_height), coll_partitions)
+                        
+                        # Create one wall south of corridor
+                        y_pos_s = corridor_y - (wall_length_per_bay / 2.0)
+                        create_box(f"Partition_S_L{{i}}_{{j}}", (x_pos, y_pos_s, z_center), (PARTITION_THICKNESS, wall_length_per_bay, panel_height), coll_partitions)
 
     print("Blender model generation complete.")
 
