@@ -34,7 +34,37 @@ def get_user_inputs() -> dict:
     inputs['col_spacing_width'] = get_numeric_input("Enter column spacing along the WIDTH (m): ")
 
     print("\n--- Interior Inputs ---")
-    inputs['partition_density_factor'] = get_numeric_input("Enter partition density factor (m/m²) (e.g., 0.1 for office, 0.3 for residential): ")
+    print("Choose a method to estimate interior partitions:")
+    print(" (F) Factor: Simple density factor (e.g., 0.3 m/m²).")
+    print(" (L) Layout: Bottom-up estimate based on building use and a central corridor.")
+    
+    # Initialize all interior inputs to 0 or None
+    inputs['partition_density_factor'] = 0
+    inputs['building_use'] = None
+    inputs['corridor_width'] = 0
+    inputs['bathroom_perimeter'] = 0
+
+    while True:
+        mode = input("Choose partition method [F/L]: ").strip().upper()
+        if mode == 'F':
+            inputs['partition_mode'] = 'F'
+            inputs['partition_density_factor'] = get_numeric_input("  Enter partition density factor (m/m²) (e.g., 0.1 for office, 0.3 for residential): ")
+            break
+        elif mode == 'L':
+            inputs['partition_mode'] = 'L'
+            print("\n  --- Layout Method Inputs ---")
+            while True:
+                use = input("  Enter Building Use (R)esidential, (C)ommercial, (O)ffice: ").strip().upper()
+                if use in ['R', 'C', 'O']:
+                    inputs['building_use'] = use
+                    break
+                else:
+                    print("  Invalid input. Please enter 'R', 'C', or 'O'.")
+            inputs['corridor_width'] = get_numeric_input("  Enter average corridor width (m) (e.g., 2): ")
+            inputs['bathroom_perimeter'] = get_numeric_input("  Enter avg. bathroom module perimeter (m) (e.g., 10 for 2.5x2.5m): ")
+            break
+        else:
+            print("Invalid choice. Please enter 'F' or 'L'.")
 
     print("\n--- Facade Inputs (WWR) ---")
     print("For Window-to-Wall Ratio (WWR), you can use a single average")
@@ -69,7 +99,11 @@ def calculate_quantities(
     num_vertical_modules: int,
     col_spacing_length: float,
     col_spacing_width: float,
+    partition_mode: str,
     partition_density_factor: float,
+    building_use: str,
+    corridor_width: float,
+    bathroom_perimeter: float,
     wwr_mode: str,
     wwr_values: dict
 ) -> dict:
@@ -129,11 +163,60 @@ def calculate_quantities(
         results['total_vertical_circulation_sqm'] = 0
 
     # --- Interior Wall Calculation (m²) ---
-    # GFA * (linear m / m²) = total linear m
-    total_linear_meters_interior = results['gross_floor_area'] * partition_density_factor
-    # Total linear m * height = total m²
-    # We use height_per_story because interior walls don't span the *entire* building height,
-    # but rather the height of each story they are on.
+    total_linear_meters_interior = 0
+    total_units = 0
+
+    if partition_mode == 'F':
+        # GFA * (linear m / m²) = total linear m
+        total_linear_meters_interior = results['gross_floor_area'] * partition_density_factor
+        results['total_units'] = 0 # Factor method doesn't calculate units
+
+    elif partition_mode == 'L':
+        # Bottom-up calculation per story
+        
+        # 1. Define constants based on use
+        avg_unit_size = 71.5 # Default (Residential)
+        bathrooms_per_unit = 1
+        if building_use == 'C':
+            avg_unit_size = 50
+            bathrooms_per_unit = 2
+        elif building_use == 'O':
+            avg_unit_size = 80
+            bathrooms_per_unit = 2
+            
+        # 2. Calculate areas and units per story
+        area_per_story = results['first_floor_area']
+        corridor_area_per_story = length * corridor_width
+        net_usable_area_per_story = area_per_story - corridor_area_per_story
+        
+        if net_usable_area_per_story < 0: net_usable_area_per_story = 0
+        if avg_unit_size == 0: avg_unit_size = 1 # Avoid division by zero
+        
+        units_per_story = math.floor(net_usable_area_per_story / avg_unit_size)
+        total_units = units_per_story * num_stories
+        results['total_units'] = total_units
+        
+        # 3. Calculate linear meters of walls per story
+        
+        # Corridor walls (2 long walls)
+        corridor_wall_lm_per_story = length * 2
+        
+        # Bathroom walls
+        bathroom_wall_lm_per_story = units_per_story * bathrooms_per_unit * bathroom_perimeter
+        
+        # Unit demising walls (walls separating units)
+        # Proxy: Each unit needs one wall of its average depth
+        # Avg depth = (building width - corridor width) / 2
+        avg_unit_depth = (width - corridor_width) / 2
+        if avg_unit_depth < 0: avg_unit_depth = 0
+        demising_wall_lm_per_story = units_per_story * avg_unit_depth
+        
+        # 4. Sum all interior walls
+        total_lm_per_story = corridor_wall_lm_per_story + bathroom_wall_lm_per_story + demising_wall_lm_per_story
+        total_linear_meters_interior = total_lm_per_story * num_stories
+
+    # 5. Calculate final interior wall area (m²)
+    # We use height_per_story because interior walls span one floor
     results['total_interior_wall_area'] = total_linear_meters_interior * height_per_story
 
 
@@ -141,8 +224,10 @@ def calculate_quantities(
 
     # Columns
     # We use floor + 1 to get the number of columns, including both ends
+    if col_spacing_length == 0: col_spacing_length = 1 # Avoid zero division
+    if col_spacing_width == 0: col_spacing_width = 1 # Avoid zero division
     num_cols_along_length = math.floor(length / col_spacing_length) + 1
-    num_cols_along_width = math.floor(width / col_spacing_length) + 1
+    num_cols_along_width = math.floor(width / col_spacing_width) + 1
     total_columns = num_cols_along_length * num_cols_along_width
     
     results['total_columns_count'] = total_columns
@@ -186,10 +271,11 @@ def print_results(results: dict):
     print(f"Vertical Circulation Area: {results['total_vertical_circulation_sqm']:,.2f} m²")
     print(f"Interior Wall Area (Est.): {results['total_interior_wall_area']:,.2f} m²")
     
-    print("\n--- LINEAR METERS (m) ---")
+    print("\n--- LINEAR METERS (m) & UNITS ---")
     print(f"Total Columns:          {results['total_columns_count']} units")
     print(f"Total Column Length:    {results['total_column_linear_meters']:,.2f} m")
     print(f"Total Beam Length:      {results['total_beam_linear_meters']:,.2f} m")
+    print(f"Estimated Total Units:  {results['total_units']} units")
     
     print("\n==========================")
     print("Calculation complete.")
@@ -218,11 +304,12 @@ def export_to_csv(model_name: str, results: dict):
         ['Vertical Circulation Area', f"{results['total_vertical_circulation_sqm']:.2f}", 'm²'],
         ['Interior Wall Area (Est.)', f"{results['total_interior_wall_area']:.2f}", 'm²'],
 
-        # Linear Meters
-        ['--- LINEAR METERS ---', '', ''],
+        # Linear Meters & Units
+        ['--- LINEAR METERS & UNITS ---', '', ''],
         ['Total Columns', f"{results['total_columns_count']}", 'units'],
         ['Total Column Length', f"{results['total_column_linear_meters']:.2f}", 'm'],
         ['Total Beam Length', f"{results['total_beam_linear_meters']:.2f}", 'm'],
+        ['Estimated Total Units', f"{results['total_units']}", 'units'],
     ]
     
     try:
@@ -236,7 +323,7 @@ def export_to_csv(model_name: str, results: dict):
         print(f"\nAn unexpected error occurred during CSV export: {e}")
 
 #
-# --- NEW FUNCTION FOR BLENDER ---
+# --- BLENDER SCRIPT FUNCTION ---
 #
 def generate_blender_script(model_name: str, inputs: dict):
     """
@@ -259,16 +346,15 @@ def generate_blender_script(model_name: str, inputs: dict):
     COL_SPACING_L = inputs['col_spacing_length']
     COL_SPACING_W = inputs['col_spacing_width']
     N_CORES = inputs['num_vertical_modules']
-    PDF = inputs['partition_density_factor'] # Partition Density Factor
+    BUILDING_USE = inputs['building_use']
+    CORRIDOR_WIDTH = inputs['corridor_width']
     
     # Calculate derived geometry values
     TOTAL_H = H_STORY * N_STORIES
     
-    # Calculate column counts
     num_cols_x = math.floor(L / COL_SPACING_L) + 1 if COL_SPACING_L > 0 else 2
     num_cols_y = math.floor(W / COL_SPACING_W) + 1 if COL_SPACING_W > 0 else 2
     
-    # Calculate exact spacing to ensure grid fits the dimensions
     x_spacing = L / (num_cols_x - 1) if num_cols_x > 1 else 0
     y_spacing = W / (num_cols_y - 1) if num_cols_y > 1 else 0
     
@@ -297,14 +383,6 @@ def generate_blender_script(model_name: str, inputs: dict):
     PARTITION_THICKNESS = 0.15 # For internal walls
 
     # --- 3. Create the Blender Script String ---
-    # This is a giant f-string that *is* the Python script
-    # we will write to a new file.
-    
-    #
-    # !! ERROR FIX !!
-    # The docstrings """...""" inside this f-string were causing
-    # the SyntaxError. They have been changed to '#' comments.
-    #
     script_content = f"""
 import bpy
 import math
@@ -334,7 +412,8 @@ WWR_E = {wwr_e}
 WWR_W = {wwr_w}
 
 N_CORES = {N_CORES}
-PDF = {PDF} # Partition Density Factor
+BUILDING_USE = "{BUILDING_USE}" # Note: Pass as a string
+CORRIDOR_WIDTH = {CORRIDOR_WIDTH}
 
 # --- Cosmetic Parameters ---
 SLAB_THICKNESS = {SLAB_THICKNESS}
@@ -344,6 +423,7 @@ BEAM_HEIGHT = {BEAM_HEIGHT}
 BEAM_WIDTH = {BEAM_WIDTH}
 CORE_DIM = {CORE_DIM}
 PARTITION_THICKNESS = {PARTITION_THICKNESS}
+BATH_MODULE_DIM = 2.0 # 2x2m bathroom
     
 # --- Helper Functions ---
 
@@ -353,7 +433,6 @@ def clear_scene():
     bpy.ops.object.select_by_type(type='MESH')
     bpy.ops.object.delete()
     
-    # Delete collections
     for collection in bpy.data.collections:
         if not collection.name == "Scene Collection":
             bpy.data.collections.remove(collection)
@@ -368,10 +447,8 @@ def create_collection(name):
 
 def add_to_collection(obj, coll):
     # Move an object to a collection.
-    # Unlink from all other collections
     for c in obj.users_collection:
         c.objects.unlink(obj)
-    # Link to the new collection
     coll.objects.link(obj)
 
 def create_box(name, location, dimensions, coll):
@@ -402,7 +479,7 @@ def apply_boolean(target, cutter, operation='DIFFERENCE'):
     mod = target.modifiers.new(name=f"Bool_{{cutter.name}}", type='BOOLEAN')
     mod.object = cutter
     mod.operation = operation
-    cutter.display_type = 'WIRE' # Make cutter visible but non-intrusive
+    cutter.display_type = 'WIRE' 
     cutter.hide_render = True
     return mod
 
@@ -421,18 +498,12 @@ def build_model():
     coll_cutters = create_collection("Cutters (Hide Me)")
 
     # --- 2. Create Slabs ---
-    # Loop N_STORIES + 1 to include ground floor and roof
     for i in range(N_STORIES + 1):
         z_pos = i * H_STORY
-        # Center slab at (0, 0, z_pos)
         loc = (0, 0, z_pos - (SLAB_THICKNESS / 2.0))
-        if i == 0:
-            name = "Ground_Slab"
-        elif i == N_STORIES:
-            name = "Roof_Slab"
-        else:
-            name = f"Slab_L{{i}}"
-        
+        name = f"Slab_L{{i}}"
+        if i == 0: name = "Ground_Slab"
+        if i == N_STORIES: name = "Roof_Slab"
         create_box(name, loc, (L, W, SLAB_THICKNESS), coll_slabs)
 
     # --- 3. Create Columns ---
@@ -441,17 +512,15 @@ def build_model():
             x = X_START + i * X_SPACING
             for j in range(NUM_COLS_Y):
                 y = Y_START + j * Y_SPACING
-                loc = (x, y, TOTAL_H / 2.0) # Center of the column
+                loc = (x, y, TOTAL_H / 2.0)
                 name = f"Column_{{i}}_{{j}}"
                 create_cylinder(name, loc, COL_RADIUS, TOTAL_H, coll_cols)
 
     # --- 4. Create Beams ---
-    # Beams sit *under* the slabs (except ground floor)
     for k in range(N_STORIES):
         level = k + 1
         z_pos = (level * H_STORY) - SLAB_THICKNESS - (BEAM_HEIGHT / 2.0)
         
-        # Beams along X-axis
         if NUM_COLS_Y > 0:
             for j in range(NUM_COLS_Y):
                 y = Y_START + j * Y_SPACING
@@ -459,7 +528,6 @@ def build_model():
                 name = f"Beam_X_L{{level}}_{{j}}"
                 create_box(name, loc, (L, BEAM_WIDTH, BEAM_HEIGHT), coll_beams)
 
-        # Beams along Y-axis
         if NUM_COLS_X > 0:
             for i in range(NUM_COLS_X):
                 x = X_START + i * X_SPACING
@@ -468,46 +536,30 @@ def build_model():
                 create_box(name, loc, (BEAM_WIDTH, W, BEAM_HEIGHT), coll_beams)
 
     # --- 5. Create Facades (Walls and Windows) per Story ---
-    
-    # Loop for each story, from ground floor up
     for i in range(N_STORIES):
-        # Calculate vertical position for this story's walls
-        # Wall starts on top of slab (z = i * H_STORY)
-        # Wall stops at bottom of beams for the *next* level up
-        # (z = (i+1) * H_STORY - SLAB_THICKNESS - BEAM_HEIGHT)
-        
         z_bottom = i * H_STORY
         z_top = (i + 1) * H_STORY - SLAB_THICKNESS - BEAM_HEIGHT
         
-        # Ensure parameters are valid (e.g., story height > slab + beam)
         panel_height = z_top - z_bottom
         if panel_height <= 0:
             print(f"Skipping wall generation for level {{i}}, panel height is zero or negative.")
             continue
             
-        # Z-location for the new centered wall panel
         z_center = z_bottom + (panel_height / 2.0)
 
-        # Create the 4 wall panels for this story
         wall_n = create_box(f"Wall_North_L{{i}}", (0, W/2, z_center), (L, WALL_THICKNESS, panel_height), coll_facades)
         wall_s = create_box(f"Wall_South_L{{i}}", (0, -W/2, z_center), (L, WALL_THICKNESS, panel_height), coll_facades)
         wall_e = create_box(f"Wall_East_L{{i}}", (L/2, 0, z_center), (WALL_THICKNESS, W, panel_height), coll_facades)
         wall_w = create_box(f"Wall_West_L{{i}}", (-L/2, 0, z_center), (WALL_THICKNESS, W, panel_height), coll_facades)
 
-        # --- Tweak 2: Create window cutouts per-bay ---
-        
-        # Define a "cosmetic" window height, e.g., 80% of the panel height
         window_height = panel_height * 0.8
-        window_z_pos = z_center # Windows are vertically centered in the panel
+        window_z_pos = z_center 
         
-        # North/South Facades (distributed along X-axis)
         bay_width_x = X_SPACING
         if bay_width_x > 0 and (NUM_COLS_X - 1) > 0:
-            # North Windows
             if WWR_N > 0:
-                # Use math.sqrt(WWR) to get a 1D ratio for the width
                 window_width = bay_width_x * math.sqrt(WWR_N)
-                window_width = min(window_width, bay_width_x * 0.9) # Add 10% margin
+                window_width = min(window_width, bay_width_x * 0.9) 
                 
                 for j in range(NUM_COLS_X - 1):
                     bay_center_x = (X_START + j * X_SPACING) + (bay_width_x / 2.0)
@@ -515,7 +567,6 @@ def build_model():
                     cutter_n = create_box(f"Cutter_N_L{{i}}_B{{j}}", loc_n, (window_width, WALL_THICKNESS*2, window_height), coll_cutters)
                     apply_boolean(wall_n, cutter_n)
 
-            # South Windows
             if WWR_S > 0:
                 window_width = bay_width_x * math.sqrt(WWR_S)
                 window_width = min(window_width, bay_width_x * 0.9)
@@ -526,10 +577,8 @@ def build_model():
                     cutter_s = create_box(f"Cutter_S_L{{i}}_B{{j}}", loc_s, (window_width, WALL_THICKNESS*2, window_height), coll_cutters)
                     apply_boolean(wall_s, cutter_s)
 
-        # East/West Facades (distributed along Y-axis)
         bay_width_y = Y_SPACING
         if bay_width_y > 0 and (NUM_COLS_Y - 1) > 0:
-            # East Windows
             if WWR_E > 0:
                 window_width = bay_width_y * math.sqrt(WWR_E)
                 window_width = min(window_width, bay_width_y * 0.9)
@@ -540,7 +589,6 @@ def build_model():
                     cutter_e = create_box(f"Cutter_E_L{{i}}_B{{j}}", loc_e, (WALL_THICKNESS*2, window_width, window_height), coll_cutters)
                     apply_boolean(wall_e, cutter_e)
 
-            # West Windows
             if WWR_W > 0:
                 window_width = bay_width_y * math.sqrt(WWR_W)
                 window_width = min(window_width, bay_width_y * 0.9)
@@ -552,77 +600,88 @@ def build_model():
                     apply_boolean(wall_w, cutter_w)
 
     # --- 6. Create Vertical Cores ---
-    # Center the cores along the X-axis and place them adjacent to the North wall.
-    
-    # Calculate the total span of all cores (including 1m spacing)
     if N_CORES > 0:
         total_core_span = (N_CORES * CORE_DIM) + (N_CORES - 1) * 1.0
-        
-        # Calculate the X-coordinate for the center of the *first* core
-        # This centers the whole block of cores at X=0
         current_core_x = -total_core_span / 2.0 + (CORE_DIM / 2.0)
-        
-        # Calculate the Y-coordinate, adjacent to the *inside* of the North wall
-        # North wall is at +W/2. Its inner face is at (W/2) - WALL_THICKNESS
-        # The core's center will be half its dimension south of that.
         core_y = (W / 2.0) - WALL_THICKNESS - (CORE_DIM / 2.0)
         
         for i in range(N_CORES):
             loc = (current_core_x, core_y, TOTAL_H / 2.0)
             name = f"Core_{{i+1}}"
             create_box(name, loc, (CORE_DIM, CORE_DIM, TOTAL_H), coll_cores)
-            
-            # Move the X-coordinate for the next core
             current_core_x += CORE_DIM + 1.0
 
-    # --- 7. Create Internal Partitions (Representative) ---
-    if PDF > 0:
-        print(f"Generating partitions with density factor: {{PDF}}")
+    # --- 7. Create Internal Partitions (New Logic) ---
+    if CORRIDOR_WIDTH > 0:
+        print(f"Generating internal partitions for {{BUILDING_USE}} use.")
         
+        # Define parameters based on building use
+        unit_size_map = {{'R': 71.5, 'C': 50, 'O': 80}}
+        bathrooms_per_unit_map = {{'R': 1, 'C': 2, 'O': 2}}
+        
+        unit_size = unit_size_map.get(BUILDING_USE, 71.5)
+        baths_per_unit = bathrooms_per_unit_map.get(BUILDING_USE, 1)
+
+        # Calculate unit layout
+        rentable_area_per_floor = (L * W) - (L * CORRIDOR_WIDTH)
+        if rentable_area_per_floor < 0: rentable_area_per_floor = 0
+        
+        num_units_per_floor = math.floor(rentable_area_per_floor / unit_size) if unit_size > 0 else 0
+        num_units_per_side = math.floor(num_units_per_floor / 2)
+        
+        unit_depth = (W - CORRIDOR_WIDTH) / 2.0 - PARTITION_THICKNESS
+        unit_width = 0
+        if num_units_per_side > 0:
+            unit_width = L / num_units_per_side
+
         for i in range(N_STORIES):
-            # Partitions go from slab to slab (bottom of next slab)
+            # Partitions go from slab to bottom of next slab
             z_bottom = i * H_STORY
-            z_top = (i + 1) * H_STORY
-            
-            # Stop partitions just under the slab above
-            panel_height = z_top - z_bottom - SLAB_THICKNESS 
+            panel_height = H_STORY - SLAB_THICKNESS 
             z_center = z_bottom + (panel_height / 2.0)
             
             if panel_height <= 0:
                 continue # Skip floor if height is invalid
 
-            # Calculate total partition length needed for this floor
-            # (L * W * PDF) = target m² area / panel_height = target m length
-            target_length_per_floor = (L * W * PDF) / panel_height
+            # Create the two main corridor walls
+            corridor_y_n = CORRIDOR_WIDTH / 2.0
+            corridor_y_s = -CORRIDOR_WIDTH / 2.0
             
-            # Create one main E-W corridor
-            corridor_y = 0 # Centered
-            create_box(f"Corridor_L{{i}}", (0, corridor_y, z_center), (L, PARTITION_THICKNESS, panel_height), coll_partitions)
-            
-            length_created = L
-            remaining_length = target_length_per_floor - length_created
-            
-            # Add perpendicular "office" walls
-            num_bays_x = NUM_COLS_X - 1
-            if remaining_length > 0 and num_bays_x > 0:
-                
-                # Get length of each perpendicular wall
-                wall_length_per_bay = remaining_length / num_bays_x
-                
-                # Cap the wall length (e.g., can't be longer than half the building width)
-                wall_length_per_bay = min(wall_length_per_bay, (W / 2.0) * 0.9)
-                
-                if wall_length_per_bay > 0.1: # Only create if they have meaningful length
-                    for j in range(num_bays_x):
-                        x_pos = X_START + (j * X_SPACING) + (X_SPACING / 2.0)
-                        
-                        # Create one wall north of corridor
-                        y_pos_n = corridor_y + (wall_length_per_bay / 2.0)
-                        create_box(f"Partition_N_L{{i}}_{{j}}", (x_pos, y_pos_n, z_center), (PARTITION_THICKNESS, wall_length_per_bay, panel_height), coll_partitions)
-                        
-                        # Create one wall south of corridor
-                        y_pos_s = corridor_y - (wall_length_per_bay / 2.0)
-                        create_box(f"Partition_S_L{{i}}_{{j}}", (x_pos, y_pos_s, z_center), (PARTITION_THICKNESS, wall_length_per_bay, panel_height), coll_partitions)
+            create_box(f"Corridor_N_L{{i}}", (0, corridor_y_n, z_center), (L, PARTITION_THICKNESS, panel_height), coll_partitions)
+            create_box(f"Corridor_S_L{{i}}", (0, corridor_y_s, z_center), (L, PARTITION_THICKNESS, panel_height), coll_partitions)
+
+            if unit_width > 0 and num_units_per_side > 0:
+                # Create the demising walls (between units)
+                for j in range(1, num_units_per_side): # Loop from 1 to N-1
+                    x_pos = X_START + j * unit_width
+                    
+                    # North side demising wall
+                    y_pos_n = corridor_y_n + (unit_depth / 2.0)
+                    create_box(f"Partition_N_L{{i}}_{{j}}", (x_pos, y_pos_n, z_center), (PARTITION_THICKNESS, unit_depth, panel_height), coll_partitions)
+                    
+                    # South side demising wall
+                    y_pos_s = corridor_y_s - (unit_depth / 2.0)
+                    create_box(f"Partition_S_L{{i}}_{{j}}", (x_pos, y_pos_s, z_center), (PARTITION_THICKNESS, unit_depth, panel_height), coll_partitions)
+
+                # Create bathroom modules
+                for j in range(num_units_per_side):
+                    # Find the "corner" of the unit by the corridor
+                    unit_start_x = X_START + j * unit_width
+                    bath_x = unit_start_x + (BATH_MODULE_DIM / 2.0) + PARTITION_THICKNESS
+                    
+                    # North side bathrooms
+                    bath_y_n = corridor_y_n + (BATH_MODULE_DIM / 2.0) + PARTITION_THICKNESS
+                    create_box(f"Bath_N_L{{i}}_{{j}}_1", (bath_x, bath_y_n, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
+                    if baths_per_unit == 2:
+                        bath_x_2 = bath_x + BATH_MODULE_DIM + 0.1 # Place second module next to first
+                        create_box(f"Bath_N_L{{i}}_{{j}}_2", (bath_x_2, bath_y_n, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
+
+                    # South side bathrooms
+                    bath_y_s = corridor_y_s - (BATH_MODULE_DIM / 2.0) - PARTITION_THICKNESS
+                    create_box(f"Bath_S_L{{i}}_{{j}}_1", (bath_x, bath_y_s, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
+                    if baths_per_unit == 2:
+                        bath_x_2 = bath_x + BATH_MODULE_DIM + 0.1
+                        create_box(f"Bath_S_L{{i}}_{{j}}_2", (bath_x_2, bath_y_s, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
 
     print("Blender model generation complete.")
 
@@ -657,9 +716,9 @@ if __name__ == "__main__":
         inputs = get_user_inputs()
         
         # Get model name for export
-        model_name = input("\nEnter a Model Name for CSV export (e.g., Building-A): ").strip()
+        model_name = input("\nEnter a Model Name for CSV/Blender export (e.g., Building-A): ").strip()
         if not model_name:
-            model_name = "construction_results" # Default name if left blank
+            model_name = "construction_model" # Default name if left blank
         
         # 2. Perform calculations
         quantities = calculate_quantities(**inputs)
@@ -677,4 +736,3 @@ if __name__ == "__main__":
         print(f"\nAn unexpected error occurred: {e}")
     
     input("\nPress Enter to exit.")
-
