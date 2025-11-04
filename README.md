@@ -38,6 +38,8 @@ The primary goal is to provide a rapid, high-level quantity takeoff that can be 
 
 * **CSV Export:** Automatically exports all calculated results to a .csv file, named according to the "Model Name" you provide.
 
+* **Blender Python Script:** Automatically create a python script to build a model based on all inputs. To use it: Open Blender > Script tab > Open > Run Script.
+
 ## How to Use
 
 **Prerequisites**
