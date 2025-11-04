@@ -60,11 +60,19 @@ def get_user_inputs() -> dict:
                     break
                 else:
                     print("  Invalid input. Please enter 'R', 'C', or 'O'.")
+            while True:
+                pos = input("Enter Corridor Position (M=Middle, N=North, S=South) [M/N/S]: ").strip().upper()
+                if pos in ['M', 'N', 'S']:
+                    inputs['corridor_position'] = pos
+                    break
+                else:
+                    print("Invalid choice. Please enter 'M', 'N', or 'S'.")
             inputs['corridor_width'] = get_numeric_input("  Enter average corridor width (m) (e.g., 2): ")
             inputs['bathroom_perimeter'] = get_numeric_input("  Enter avg. bathroom module perimeter (m) (e.g., 10 for 2.5x2.5m): ")
             break
         else:
             print("Invalid choice. Please enter 'F' or 'L'.")
+            
 
     print("\n--- Facade Inputs (WWR) ---")
     print("For Window-to-Wall Ratio (WWR), you can use a single average")
@@ -103,6 +111,7 @@ def calculate_quantities(
     partition_density_factor: float,
     building_use: str,
     corridor_width: float,
+    corridor_position: str,
     bathroom_perimeter: float,
     wwr_mode: str,
     wwr_values: dict
@@ -198,8 +207,13 @@ def calculate_quantities(
         
         # 3. Calculate linear meters of walls per story
         
-        # Corridor walls (2 long walls)
-        corridor_wall_lm_per_story = length * 2
+        # Corridor walls (calculate linear meters of corridor walls per story)
+        if corridor_position == 'M':
+    	    # Double loaded = 2 corridor walls
+            corridor_wall_lm_per_story = length * 2
+        else:
+            # Single loaded = 1 corridor wall
+            corridor_wall_lm_per_story = length * 1
         
         # Bathroom walls
         bathroom_wall_lm_per_story = units_per_story * bathrooms_per_unit * bathroom_perimeter
@@ -347,6 +361,7 @@ def generate_blender_script(model_name: str, inputs: dict):
     COL_SPACING_W = inputs['col_spacing_width']
     N_CORES = inputs['num_vertical_modules']
     BUILDING_USE = inputs['building_use']
+    CORRIDOR_POS = inputs['corridor_position'] # NEW
     CORRIDOR_WIDTH = inputs['corridor_width']
     
     # Calculate derived geometry values
@@ -412,7 +427,8 @@ WWR_E = {wwr_e}
 WWR_W = {wwr_w}
 
 N_CORES = {N_CORES}
-BUILDING_USE = "{BUILDING_USE}" # Note: Pass as a string
+BUILDING_USE = "{BUILDING_USE}"
+CORRIDOR_POS = "{CORRIDOR_POS}" # NEW
 CORRIDOR_WIDTH = {CORRIDOR_WIDTH}
 
 # --- Cosmetic Parameters ---
@@ -532,7 +548,7 @@ def build_model():
             for i in range(NUM_COLS_X):
                 x = X_START + i * X_SPACING
                 loc = (x, 0, z_pos)
-                name = f"Beam_Y_L{{level}}_{{i}}"
+                name = f"Beam_Y_L{{level}}_{{j}}"
                 create_box(name, loc, (BEAM_WIDTH, W, BEAM_HEIGHT), coll_beams)
 
     # --- 5. Create Facades (Walls and Windows) per Story ---
@@ -603,8 +619,15 @@ def build_model():
     if N_CORES > 0:
         total_core_span = (N_CORES * CORE_DIM) + (N_CORES - 1) * 1.0
         current_core_x = -total_core_span / 2.0 + (CORE_DIM / 2.0)
-        core_y = (W / 2.0) - WALL_THICKNESS - (CORE_DIM / 2.0)
         
+        # Core Y position depends on corridor
+        if CORRIDOR_POS == 'S':
+            # Place adjacent to South facade
+            core_y = (-W / 2.0) + WALL_THICKNESS + (CORE_DIM / 2.0)
+        else:
+            # Place adjacent to North facade (for 'M' and 'N' layouts)
+            core_y = (W / 2.0) - WALL_THICKNESS - (CORE_DIM / 2.0)
+
         for i in range(N_CORES):
             loc = (current_core_x, core_y, TOTAL_H / 2.0)
             name = f"Core_{{i+1}}"
@@ -613,7 +636,7 @@ def build_model():
 
     # --- 7. Create Internal Partitions (New Logic) ---
     if CORRIDOR_WIDTH > 0:
-        print(f"Generating internal partitions for {{BUILDING_USE}} use.")
+        print(f"Generating internal partitions for {{BUILDING_USE}} use ({{CORRIDOR_POS}} layout).")
         
         # Define parameters based on building use
         unit_size_map = {{'R': 71.5, 'C': 50, 'O': 80}}
@@ -627,13 +650,7 @@ def build_model():
         if rentable_area_per_floor < 0: rentable_area_per_floor = 0
         
         num_units_per_floor = math.floor(rentable_area_per_floor / unit_size) if unit_size > 0 else 0
-        num_units_per_side = math.floor(num_units_per_floor / 2)
         
-        unit_depth = (W - CORRIDOR_WIDTH) / 2.0 - PARTITION_THICKNESS
-        unit_width = 0
-        if num_units_per_side > 0:
-            unit_width = L / num_units_per_side
-
         for i in range(N_STORIES):
             # Partitions go from slab to bottom of next slab
             z_bottom = i * H_STORY
@@ -643,45 +660,99 @@ def build_model():
             if panel_height <= 0:
                 continue # Skip floor if height is invalid
 
-            # Create the two main corridor walls
-            corridor_y_n = CORRIDOR_WIDTH / 2.0
-            corridor_y_s = -CORRIDOR_WIDTH / 2.0
+            # --- Branching layout logic ---
             
-            create_box(f"Corridor_N_L{{i}}", (0, corridor_y_n, z_center), (L, PARTITION_THICKNESS, panel_height), coll_partitions)
-            create_box(f"Corridor_S_L{{i}}", (0, corridor_y_s, z_center), (L, PARTITION_THICKNESS, panel_height), coll_partitions)
+            if CORRIDOR_POS == 'M':
+                # --- Double-Loaded Corridor (Center) ---
+                corridor_y_n = CORRIDOR_WIDTH / 2.0
+                corridor_y_s = -CORRIDOR_WIDTH / 2.0
+                
+                create_box(f"Corridor_N_L{{i}}", (0, corridor_y_n, z_center), (L, PARTITION_THICKNESS, panel_height), coll_partitions)
+                create_box(f"Corridor_S_L{{i}}", (0, corridor_y_s, z_center), (L, PARTITION_THICKNESS, panel_height), coll_partitions)
 
-            if unit_width > 0 and num_units_per_side > 0:
-                # Create the demising walls (between units)
-                for j in range(1, num_units_per_side): # Loop from 1 to N-1
-                    x_pos = X_START + j * unit_width
-                    
-                    # North side demising wall
-                    y_pos_n = corridor_y_n + (unit_depth / 2.0)
-                    create_box(f"Partition_N_L{{i}}_{{j}}", (x_pos, y_pos_n, z_center), (PARTITION_THICKNESS, unit_depth, panel_height), coll_partitions)
-                    
-                    # South side demising wall
-                    y_pos_s = corridor_y_s - (unit_depth / 2.0)
-                    create_box(f"Partition_S_L{{i}}_{{j}}", (x_pos, y_pos_s, z_center), (PARTITION_THICKNESS, unit_depth, panel_height), coll_partitions)
+                num_units_per_side = math.floor(num_units_per_floor / 2)
+                unit_depth = (W - CORRIDOR_WIDTH) / 2.0 - PARTITION_THICKNESS
+                unit_width = L / num_units_per_side if num_units_per_side > 0 else 0
 
-                # Create bathroom modules
-                for j in range(num_units_per_side):
-                    # Find the "corner" of the unit by the corridor
-                    unit_start_x = X_START + j * unit_width
-                    bath_x = unit_start_x + (BATH_MODULE_DIM / 2.0) + PARTITION_THICKNESS
-                    
-                    # North side bathrooms
-                    bath_y_n = corridor_y_n + (BATH_MODULE_DIM / 2.0) + PARTITION_THICKNESS
-                    create_box(f"Bath_N_L{{i}}_{{j}}_1", (bath_x, bath_y_n, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
-                    if baths_per_unit == 2:
-                        bath_x_2 = bath_x + BATH_MODULE_DIM + 0.1 # Place second module next to first
-                        create_box(f"Bath_N_L{{i}}_{{j}}_2", (bath_x_2, bath_y_n, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
+                if unit_width > 0:
+                    # Create the demising walls (between units)
+                    for j in range(1, num_units_per_side): # Loop from 1 to N-1
+                        x_pos = X_START + j * unit_width
+                        
+                        # North side demising wall
+                        y_pos_n = corridor_y_n + (unit_depth / 2.0)
+                        create_box(f"Partition_N_L{{i}}_{{j}}", (x_pos, y_pos_n, z_center), (PARTITION_THICKNESS, unit_depth, panel_height), coll_partitions)
+                        
+                        # South side demising wall
+                        y_pos_s = corridor_y_s - (unit_depth / 2.0)
+                        create_box(f"Partition_S_L{{i}}_{{j}}", (x_pos, y_pos_s, z_center), (PARTITION_THICKNESS, unit_depth, panel_height), coll_partitions)
 
-                    # South side bathrooms
-                    bath_y_s = corridor_y_s - (BATH_MODULE_DIM / 2.0) - PARTITION_THICKNESS
-                    create_box(f"Bath_S_L{{i}}_{{j}}_1", (bath_x, bath_y_s, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
-                    if baths_per_unit == 2:
-                        bath_x_2 = bath_x + BATH_MODULE_DIM + 0.1
-                        create_box(f"Bath_S_L{{i}}_{{j}}_2", (bath_x_2, bath_y_s, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
+                    # Create bathroom modules
+                    for j in range(num_units_per_side):
+                        unit_start_x = X_START + j * unit_width
+                        bath_x = unit_start_x + (BATH_MODULE_DIM / 2.0) + PARTITION_THICKNESS
+                        
+                        # North side bathrooms
+                        bath_y_n = corridor_y_n + (BATH_MODULE_DIM / 2.0) + PARTITION_THICKNESS
+                        create_box(f"Bath_N_L{{i}}_{{j}}_1", (bath_x, bath_y_n, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
+                        if baths_per_unit == 2:
+                            bath_x_2 = bath_x + BATH_MODULE_DIM + 0.1
+                            create_box(f"Bath_N_L{{i}}_{{j}}_2", (bath_x_2, bath_y_n, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
+
+                        # South side bathrooms
+                        bath_y_s = corridor_y_s - (BATH_MODULE_DIM / 2.0) - PARTITION_THICKNESS
+                        create_box(f"Bath_S_L{{i}}_{{j}}_1", (bath_x, bath_y_s, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
+                        if baths_per_unit == 2:
+                            bath_x_2 = bath_x + BATH_MODULE_DIM + 0.1
+                            create_box(f"Bath_S_L{{i}}_{{j}}_2", (bath_x_2, bath_y_s, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
+
+            else:
+                # --- Single-Loaded Corridor (North or South) ---
+                num_units_on_side = num_units_per_floor
+                # Depth from partition wall to *inside* of facade wall
+                unit_depth = W - CORRIDOR_WIDTH - WALL_THICKNESS - PARTITION_THICKNESS 
+                unit_width = L / num_units_on_side if num_units_on_side > 0 else 0
+                
+                corridor_partition_y = 0
+                unit_y_pos = 0
+                bath_y = 0
+                
+                if CORRIDOR_POS == 'N':
+                    # Corridor at North, units face South
+                    # The ONE partition wall is south of the corridor
+                    corridor_partition_y = (W / 2.0) - WALL_THICKNESS - CORRIDOR_WIDTH
+                    # Units are south of that
+                    unit_y_pos = corridor_partition_y - (unit_depth / 2.0)
+                    # Bathrooms are just south of the partition
+                    bath_y = corridor_partition_y - (BATH_MODULE_DIM / 2.0) - PARTITION_THICKNESS
+                
+                elif CORRIDOR_POS == 'S':
+                    # Corridor at South, units face North
+                    # The ONE partition wall is north of the corridor
+                    corridor_partition_y = (-W / 2.0) + WALL_THICKNESS + CORRIDOR_WIDTH
+                    # Units are north of that
+                    unit_y_pos = corridor_partition_y + (unit_depth / 2.0)
+                    # Bathrooms are just north of the partition
+                    bath_y = corridor_partition_y + (BATH_MODULE_DIM / 2.0) + PARTITION_THICKNESS
+
+                # Create the *one* corridor wall
+                create_box(f"Corridor_Wall_L{{i}}", (0, corridor_partition_y, z_center), (L, PARTITION_THICKNESS, panel_height), coll_partitions)
+
+                if unit_width > 0 and unit_depth > 0:
+                    # Create demising walls (one side only)
+                    for j in range(1, num_units_on_side): # Loop from 1 to N-1
+                        x_pos = X_START + j * unit_width
+                        create_box(f"Partition_L{{i}}_{{j}}", (x_pos, unit_y_pos, z_center), (PARTITION_THICKNESS, unit_depth, panel_height), coll_partitions)
+                    
+                    # Create bathrooms (one side only)
+                    for j in range(num_units_on_side):
+                        unit_start_x = X_START + j * unit_width
+                        bath_x = unit_start_x + (BATH_MODULE_DIM / 2.0) + PARTITION_THICKNESS
+                        
+                        create_box(f"Bath_L{{i}}_{{j}}_1", (bath_x, bath_y, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
+                        if baths_per_unit == 2:
+                            bath_x_2 = bath_x + BATH_MODULE_DIM + 0.1
+                            create_box(f"Bath_L{{i}}_{{j}}_2", (bath_x_2, bath_y, z_center), (BATH_MODULE_DIM, BATH_MODULE_DIM, panel_height), coll_partitions)
 
     print("Blender model generation complete.")
 
