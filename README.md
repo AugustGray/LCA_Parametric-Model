@@ -38,7 +38,7 @@ The primary goal is to provide a rapid, high-level quantity takeoff that can be 
 
 * **CSV Export:** Automatically exports all calculated results to a .csv file, named according to the "Model Name" you provide.
 
-* **Blender Python Script:** Automatically create a python script to build a model based on all inputs. To use it: Open Blender > Script tab > Open > Run Script.
+* **Blender Python Script:** Automatically creates a python script to build a model based on all inputs. To use it: Open Blender > Script tab > Open > Run Script.
 
 ## How to Use
 
@@ -54,10 +54,14 @@ The primary goal is to provide a rapid, high-level quantity takeoff that can be 
 
 3. Navigate to the directory where you saved the file.
 
-4. Run the script using the following command:
+4. Run the script using the following command: (This script will create only a report of material quantities on an .csv file)
 
 ```
-python construction_calculator.py
+python LCA_Parametric-Model.py
+```
+or run: (This will create the report of materials + a python script for blender)
+```
+python LCA_Parametric-Model_Blender.py
 ```
 
 5. The script will guide you through all the required inputs one by one.
