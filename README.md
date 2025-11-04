@@ -40,6 +40,8 @@ The primary goal is to provide a rapid, high-level quantity takeoff that can be 
 
 * **Blender Python Script:** Automatically creates a python script to build a model based on all inputs. To use it: Open Blender > Script tab > Open > Run Script.
 
+* **Rhino Python Script:** Automatically creates a python script to build a model based on all inputs. To use it: Open Rhino > RunPythonScript command > Select Script.
+
 ## How to Use
 
 **Prerequisites**
@@ -56,13 +58,17 @@ The primary goal is to provide a rapid, high-level quantity takeoff that can be 
 
 4. Run the script using the following command: (This script will create only a report of material quantities on an .csv file)
 
-```
-python LCA_Parametric-Model.py
-```
-or run: (This will create the report of materials + a python script for blender)
-```
-python LCA_Parametric-Model_Blender.py
-```
+	```
+	python LCA_Parametric-Model.py
+	```
+	for blender model run: (This will create the report of materials + a python script for blender)
+	```
+	python LCA_Parametric-Model_Blender.py
+	```
+	for rhino model run: (This will create the report of materials + a python script for rhino)
+	```
+	python LCA_Parametric-Model_Rhino.py
+	```
 
 5. The script will guide you through all the required inputs one by one.
 
