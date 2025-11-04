@@ -116,8 +116,10 @@ Example: 0.1 (open-plan office) to 0.3 (residential) or 0.5 (hotel).
 
 ## Output
 
-The script generates two outputs:
+The script generates two or three outputs:
 
 1. **Console Report:** A summary of all calculated areas (m²) and linear meters (m) printed directly to your terminal.
 
 2. **CSV File:** A file named <Your-Model-Name>.csv containing all the results, formatted for use in spreadsheets (like Excel or Google Sheets) or for import into other analysis software.
+
+3. **Python Script (for Blender or Rhino):** It automatically generates a script to build a 3D model using all input data, the model contains floor slabs, walls, WWR based openings, and inner walls adjusted to the selected layout"
